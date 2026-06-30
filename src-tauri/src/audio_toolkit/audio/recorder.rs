@@ -55,6 +55,20 @@ impl AudioRecorder {
     }
 
     pub fn open(&mut self, device: Option<Device>) -> Result<(), Box<dyn std::error::Error>> {
+        self.open_with_options(device, false)
+    }
+
+    /// Open the recorder. When `loopback` is true, the provided `device` is
+    /// treated as an **output** endpoint and recorded via WASAPI loopback
+    /// (Windows) / ScreenCaptureKit (macOS 14.6+) / monitor source (Linux via
+    /// PipeWire/PulseAudio). cpal automatically applies
+    /// `AUDCLNT_STREAMFLAGS_LOOPBACK` when `build_input_stream` is called on an
+    /// output device.
+    pub fn open_with_options(
+        &mut self,
+        device: Option<Device>,
+        loopback: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if self.worker_handle.is_some() {
             return Ok(()); // already open
         }
@@ -66,9 +80,20 @@ impl AudioRecorder {
         let host = crate::audio_toolkit::get_cpal_host();
         let device = match device {
             Some(dev) => dev,
-            None => host
-                .default_input_device()
-                .ok_or_else(|| Error::new(std::io::ErrorKind::NotFound, "No input device found"))?,
+            None => {
+                if loopback {
+                    host.default_output_device().ok_or_else(|| {
+                        Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "No output device found for loopback capture",
+                        )
+                    })?
+                } else {
+                    host.default_input_device().ok_or_else(|| {
+                        Error::new(std::io::ErrorKind::NotFound, "No input device found")
+                    })?
+                }
+            }
         };
 
         let thread_device = device.clone();
@@ -78,7 +103,7 @@ impl AudioRecorder {
 
         let worker = std::thread::spawn(move || {
             let init_result = (|| -> Result<(cpal::Stream, u32), String> {
-                let config = AudioRecorder::get_preferred_config(&thread_device)
+                let config = AudioRecorder::get_preferred_config(&thread_device, loopback)
                     .map_err(|e| format!("Failed to fetch preferred config: {e}"))?;
 
                 let sample_rate = config.sample_rate().0;
@@ -254,8 +279,16 @@ impl AudioRecorder {
 
     fn get_preferred_config(
         device: &cpal::Device,
+        loopback: bool,
     ) -> Result<cpal::SupportedStreamConfig, Box<dyn std::error::Error>> {
-        let supported_configs = device.supported_input_configs()?;
+        // For loopback we must query the device's OUTPUT configs — cpal will
+        // still build an input stream (with WASAPI_LOOPBACK flag set) from it.
+        let supported_configs: Box<dyn Iterator<Item = cpal::SupportedStreamConfigRange>> =
+            if loopback {
+                Box::new(device.supported_output_configs()?)
+            } else {
+                Box::new(device.supported_input_configs()?)
+            };
         let mut best_config: Option<cpal::SupportedStreamConfigRange> = None;
 
         // Try to find a config that supports 16kHz, prioritizing better formats
@@ -287,7 +320,11 @@ impl AudioRecorder {
         }
 
         // If no config supports 16kHz, fall back to default
-        Ok(device.default_input_config()?)
+        if loopback {
+            Ok(device.default_output_config()?)
+        } else {
+            Ok(device.default_input_config()?)
+        }
     }
 }
 

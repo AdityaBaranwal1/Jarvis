@@ -1,7 +1,7 @@
 use crate::audio_feedback;
 use crate::audio_toolkit::audio::{list_input_devices, list_output_devices};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
-use crate::settings::{get_settings, write_settings};
+use crate::settings::{get_settings, write_settings, CaptureSource};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -266,6 +266,75 @@ pub fn get_selected_output_device(app: AppHandle) -> Result<String, String> {
     Ok(settings
         .selected_output_device
         .unwrap_or_else(|| "default".to_string()))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_available_system_audio_devices() -> Result<Vec<AudioDevice>, String> {
+    // System (loopback) audio is captured from *output* endpoints on Windows
+    // (WASAPI loopback) and macOS 14.6+ (ScreenCaptureKit). Linux desktops
+    // expose a "monitor" source which also shows up as an output-device clone.
+    let devices =
+        list_output_devices().map_err(|e| format!("Failed to list output devices: {}", e))?;
+
+    let mut result = vec![AudioDevice {
+        index: "default".to_string(),
+        name: "Default".to_string(),
+        is_default: true,
+    }];
+
+    result.extend(devices.into_iter().map(|d| AudioDevice {
+        index: d.index,
+        name: d.name,
+        is_default: false,
+    }));
+
+    Ok(result)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_selected_system_audio_device(app: AppHandle) -> Result<String, String> {
+    let settings = get_settings(&app);
+    Ok(settings
+        .selected_system_audio_device
+        .unwrap_or_else(|| "default".to_string()))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_selected_system_audio_device(app: AppHandle, device_name: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.selected_system_audio_device = if device_name == "default" {
+        None
+    } else {
+        Some(device_name)
+    };
+    write_settings(&app, settings);
+
+    let rm = app.state::<Arc<AudioRecordingManager>>();
+    rm.update_selected_device()
+        .map_err(|e| format!("Failed to update selected device: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_capture_source(app: AppHandle) -> Result<CaptureSource, String> {
+    Ok(get_settings(&app).capture_source)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_capture_source(app: AppHandle, source: CaptureSource) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.capture_source = source;
+    write_settings(&app, settings);
+
+    let rm = app.state::<Arc<AudioRecordingManager>>();
+    rm.update_selected_device()
+        .map_err(|e| format!("Failed to update capture source: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]

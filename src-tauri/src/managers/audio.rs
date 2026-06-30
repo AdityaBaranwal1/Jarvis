@@ -1,11 +1,22 @@
-use crate::audio_toolkit::{list_input_devices, vad::SmoothedVad, AudioRecorder, SileroVad};
+use crate::audio_toolkit::{
+    audio::list_output_devices, list_input_devices, vad::SmoothedVad, AudioRecorder, SileroVad,
+};
 use crate::helpers::clamshell;
-use crate::settings::{get_settings, AppSettings};
+use crate::settings::{get_settings, AppSettings, CaptureSource};
 use crate::utils;
 use log::{debug, error, info};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::Manager;
+
+// Saved master-volume scalar for the playback endpoint while we're "muted" via
+// volume attenuation. We avoid IAudioEndpointVolume::SetMute on Windows because
+// the resulting AudioSessionStateChanged storm can leave Chromium-based apps
+// (browsers playing video, Electron apps, etc.) stuck silent after the unmute,
+// requiring a manual endpoint reinit (e.g. toggling Windows Sonic) to recover.
+// Attenuating master volume to 0.0 produces the same audible effect without
+// touching mute state, so no session-state event is fired.
+static PRIOR_VOLUME: Mutex<Option<f32>> = Mutex::new(None);
 
 fn set_mute(mute: bool) {
     // Expected behavior:
@@ -47,7 +58,14 @@ fn set_mute(mute: bool) {
                 default_device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
             );
 
-            let _ = volume_interface.SetMute(mute, std::ptr::null());
+            if mute {
+                if let Ok(current) = volume_interface.GetMasterVolumeLevelScalar() {
+                    *PRIOR_VOLUME.lock().unwrap() = Some(current);
+                    let _ = volume_interface.SetMasterVolumeLevelScalar(0.0, std::ptr::null());
+                }
+            } else if let Some(prior) = PRIOR_VOLUME.lock().unwrap().take() {
+                let _ = volume_interface.SetMasterVolumeLevelScalar(prior, std::ptr::null());
+            }
         }
     }
 
@@ -210,6 +228,20 @@ impl AudioRecordingManager {
         }
     }
 
+    fn get_effective_system_audio_device(&self, settings: &AppSettings) -> Option<cpal::Device> {
+        let device_name = settings.selected_system_audio_device.as_ref()?;
+        match list_output_devices() {
+            Ok(devices) => devices
+                .into_iter()
+                .find(|d| d.name == *device_name)
+                .map(|d| d.device),
+            Err(e) => {
+                debug!("Failed to list output devices, using default: {}", e);
+                None
+            }
+        }
+    }
+
     /* ---------- microphone life-cycle -------------------------------------- */
 
     /// Applies mute if mute_while_recording is enabled and stream is open
@@ -265,11 +297,20 @@ impl AudioRecordingManager {
         }
 
         // Get the selected device from settings, considering clamshell mode
+        // and the chosen capture source (microphone / system loopback / mixed).
         let settings = get_settings(&self.app_handle);
-        let selected_device = self.get_effective_microphone_device(&settings);
+        let (selected_device, loopback) = match settings.capture_source {
+            CaptureSource::Microphone => (self.get_effective_microphone_device(&settings), false),
+            // NOTE: Mixed mode currently routes to system-only. Simultaneous
+            // mic+system capture requires a secondary recorder + sample mixing
+            // and is the next pass.
+            CaptureSource::System | CaptureSource::Mixed => {
+                (self.get_effective_system_audio_device(&settings), true)
+            }
+        };
 
         if let Some(rec) = recorder_opt.as_mut() {
-            rec.open(selected_device)
+            rec.open_with_options(selected_device, loopback)
                 .map_err(|e| anyhow::anyhow!("Failed to open recorder: {}", e))?;
         }
 
