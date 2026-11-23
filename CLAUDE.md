@@ -4,9 +4,10 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project
 
-J.A.R.V.I.S. — A personal voice assistant for Windows, forked from Handy v0.7.10.
+J.A.R.V.I.S. — A personal voice assistant for Windows, forked from Handy (merged up to v0.10.1, 2026-11-22;
+`upstream` remote = cjpais/Handy, so updates are `git merge vX.Y.Z`).
 Built with Tauri 2.x (Rust backend + React/TypeScript frontend).
-Local-first speech-to-text via Parakeet/Whisper models with LLM post-processing.
+Local-first speech-to-text (GGUF models through transcribe.cpp) with LLM post-processing.
 
 **Goal:** Extend into a Jarvis-like voice command system with app launching,
 smart home control (Broadlink, Google Home), and LLM-powered intent routing.
@@ -23,8 +24,9 @@ bun run lint             # ESLint for frontend
 bun run format           # Prettier + cargo fmt
 ```
 
-**VAD model** (`src-tauri/resources/models/silero_vad_v4.onnx`) is already in the repo.
-ASR models (Parakeet, Whisper, etc.) download at runtime from `blob.handy.computer`.
+**VAD model** (`src-tauri/resources/models/silero-vad-v6.2-F32.gguf`) is already in the repo.
+ASR models (GGUF) download at runtime from Hugging Face (`handy-computer/*` repos, catalog in
+`src-tauri/src/catalog/catalog.json`); old-format models from 0.7.x are migrated in the app.
 
 ## Architecture Overview
 
@@ -33,10 +35,11 @@ ASR models (Parakeet, Whisper, etc.) download at runtime from `blob.handy.comput
 - `lib.rs` — Tauri setup, plugin registration, manager initialization
 - `managers/` — Core business logic:
   - `audio.rs` — CPAL recording, device management, VAD integration
-  - `model.rs` — Model download/extract from blob.handy.computer CDN
-  - `transcription.rs` — ASR engine loading (Parakeet, Whisper, Moonshine, etc.)
+  - `model.rs`, `model/` — Model catalog, downloads (Hugging Face, mirror blob.handy.computer), 0.7.x migration
+  - `transcription.rs` — ASR via transcribe-cpp, run in a separate worker process (`engine_supervisor/`)
   - `history.rs` — SQLite transcription history
-- `audio_toolkit/` — Low-level audio: recording, resampling, Silero VAD, FFT
+- `audio_toolkit/` — Low-level audio: VAD (Silero / Earshot), chunking, decoding; microphone capture is the
+  `handy-recorder` crate, vendored in `vendor/handy-recorder` with a loopback patch (capture source)
 - `actions.rs` — ShortcutAction trait, TranscribeAction, post-processing pipeline
 - `llm_client.rs` — OpenAI-compatible API client (8 providers)
 - `clipboard.rs` — Paste methods including ExternalScript hook
@@ -65,13 +68,13 @@ ASR models (Parakeet, Whisper, etc.) download at runtime from `blob.handy.comput
 ## DO NOT Change
 
 - `handy-keys` / `handy_keys` references — external crate dependency, NOT our app name
-- `blob.handy.computer` URLs — model CDN from upstream, still needed for downloads
+- `blob.handy.computer` / `handy-computer/*` Hugging Face repos — upstream model sources, still needed
 - `LICENSE` — MIT, legally required to retain
 
 ## Hardware Target
 
 - Windows 11, Ryzen 9 7900X, RTX 4070 Ti, 32GB DDR5
-- All ASR inference on CPU via ONNX Runtime (no GPU)
+- ASR on CPU or the Vulkan GPU backend (transcribe-cpp; Windows x64 builds need the Vulkan SDK)
 - Target: under 1GB total RAM usage
 
 ## Code Style

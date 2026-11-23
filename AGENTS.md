@@ -19,12 +19,11 @@ bun run format           # Prettier + cargo fmt
 
 **Model Setup (Required for Development):**
 
-The VAD model (`src-tauri/resources/models/silero_vad_v4.onnx`) is already in the repo.
-If missing, download from: `https://blob.handy.computer/silero_vad_v4.onnx`
+The VAD model (`src-tauri/resources/models/silero-vad-v6.2-F32.gguf`) is already in the repo.
 
 ## Architecture Overview
 
-J.A.R.V.I.S. is a desktop voice assistant built with Tauri 2.x (Rust backend + React/TypeScript frontend). Forked from Handy v0.7.10.
+J.A.R.V.I.S. is a desktop voice assistant built with Tauri 2.x (Rust backend + React/TypeScript frontend). Forked from Handy (merged up to v0.10.1).
 
 ### Backend (Rust - src-tauri/src/)
 
@@ -32,7 +31,7 @@ J.A.R.V.I.S. is a desktop voice assistant built with Tauri 2.x (Rust backend + R
 - `managers/` - Core business logic:
   - `audio.rs` - Audio recording and device management (CPAL)
   - `model.rs` - ASR model downloading and management
-  - `transcription.rs` - Speech-to-text pipeline (transcribe-rs)
+  - `transcription.rs` - Speech-to-text pipeline (transcribe-cpp, isolated worker in `engine_supervisor/`)
   - `history.rs` - Transcription history (SQLite)
 - `audio_toolkit/` - Low-level audio processing:
   - `audio/` - Device enumeration, recording, resampling
