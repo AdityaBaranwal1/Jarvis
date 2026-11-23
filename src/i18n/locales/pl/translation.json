@@ -322,6 +322,25 @@
         "add": "Dodaj",
         "remove": "Usuń {{word}}",
         "duplicate": "\"{{word}}\" już istnieje"
+      },
+      "remoteStt": {
+        "label": "Remote Transcription",
+        "description": "Send recordings to an OpenAI-compatible speech-to-text server (/audio/transcriptions) instead of the local model. If the server can't be reached, the local model is used.",
+        "baseUrl": {
+          "title": "Server URL",
+          "description": "Base URL of the API, ending in /v1",
+          "placeholder": "https://speech-to-text.example.ts.net/v1"
+        },
+        "apiKey": {
+          "title": "API Key",
+          "description": "Sent as a Bearer token. Leave empty if the server has none.",
+          "placeholder": "API key"
+        },
+        "model": {
+          "title": "Model",
+          "description": "Model name sent with each request",
+          "placeholder": "whisper-1"
+        }
       }
     },
     "postProcessing": {

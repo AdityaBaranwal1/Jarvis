@@ -376,6 +376,21 @@ pub struct AppSettings {
     pub external_script_path: Option<String>,
     #[serde(default)]
     pub custom_filler_words: Option<Vec<String>>,
+    /// Send dictation to an OpenAI-compatible `/audio/transcriptions` server instead of the
+    /// local model (falls back to the local model on any error). Off by default.
+    #[serde(default)]
+    pub remote_stt_enabled: bool,
+    /// e.g. `https://speech-to-text.example.ts.net/v1`
+    #[serde(default)]
+    pub remote_stt_base_url: String,
+    #[serde(default)]
+    pub remote_stt_api_key: String,
+    #[serde(default = "default_remote_stt_model")]
+    pub remote_stt_model: String,
+}
+
+fn default_remote_stt_model() -> String {
+    "whisper-1".to_string()
 }
 
 fn default_model() -> String {
@@ -738,6 +753,10 @@ pub fn get_default_settings() -> AppSettings {
         typing_tool: default_typing_tool(),
         external_script_path: None,
         custom_filler_words: None,
+        remote_stt_enabled: false,
+        remote_stt_base_url: String::new(),
+        remote_stt_api_key: String::new(),
+        remote_stt_model: default_remote_stt_model(),
     }
 }
 

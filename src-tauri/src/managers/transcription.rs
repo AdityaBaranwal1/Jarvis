@@ -1,6 +1,7 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::model::{EngineType, ModelManager};
-use crate::settings::{get_settings, ModelUnloadTimeout};
+use crate::remote_stt;
+use crate::settings::{get_settings, AppSettings, ModelUnloadTimeout};
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
@@ -598,22 +599,7 @@ impl TranscriptionManager {
             .map(|info| matches!(info.engine_type, EngineType::Whisper))
             .unwrap_or(false);
 
-        let corrected_result = if !settings.custom_words.is_empty() && !is_whisper {
-            apply_custom_words(
-                &result.text,
-                &settings.custom_words,
-                settings.word_correction_threshold,
-            )
-        } else {
-            result.text
-        };
-
-        // Filter out filler words and hallucinations
-        let filtered_result = filter_transcription_output(
-            &corrected_result,
-            &settings.app_language,
-            &settings.custom_filler_words,
-        );
+        let filtered_result = Self::finish_text(&settings, result.text, !is_whisper);
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -638,6 +624,55 @@ impl TranscriptionManager {
         self.maybe_unload_immediately("transcription");
 
         Ok(final_result)
+    }
+
+    /// Custom-word correction (optional) + filler/hallucination filter, shared by the local
+    /// engines and the remote endpoint.
+    fn finish_text(settings: &AppSettings, text: String, apply_words: bool) -> String {
+        let corrected = if apply_words && !settings.custom_words.is_empty() {
+            apply_custom_words(
+                &text,
+                &settings.custom_words,
+                settings.word_correction_threshold,
+            )
+        } else {
+            text
+        };
+        filter_transcription_output(
+            &corrected,
+            &settings.app_language,
+            &settings.custom_filler_words,
+        )
+    }
+
+    /// Transcribe with the remote OpenAI-compatible endpoint when it is configured, otherwise
+    /// (or when the remote call fails) with the local model.
+    pub async fn transcribe_auto(&self, audio: Vec<f32>) -> Result<String> {
+        let settings = get_settings(&self.app_handle);
+        if !audio.is_empty() && remote_stt::is_configured(&settings) {
+            let st = std::time::Instant::now();
+            match remote_stt::transcribe(&settings, &audio).await {
+                Ok(text) => {
+                    let text = Self::finish_text(&settings, text, true);
+                    info!(
+                        "Remote transcription completed in {}ms ({:.1}s of audio)",
+                        st.elapsed().as_millis(),
+                        audio.len() as f64 / 16000.0
+                    );
+                    return Ok(text);
+                }
+                Err(e) => {
+                    warn!(
+                        "Remote transcription failed after {}ms ({}); falling back to the local model",
+                        st.elapsed().as_millis(),
+                        e
+                    );
+                    // In remote mode the local model is not preloaded; load it now.
+                    self.initiate_model_load();
+                }
+            }
+        }
+        self.transcribe(audio)
     }
 }
 

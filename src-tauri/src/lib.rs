@@ -11,6 +11,7 @@ mod input;
 mod llm_client;
 mod managers;
 mod overlay;
+mod remote_stt;
 pub mod portable;
 mod settings;
 mod shortcut;
@@ -336,6 +337,10 @@ pub fn run(cli_args: CliArgs) {
         shortcut::resume_binding,
         shortcut::change_mute_while_recording_setting,
         shortcut::change_append_trailing_space_setting,
+        shortcut::change_remote_stt_enabled_setting,
+        shortcut::change_remote_stt_base_url_setting,
+        shortcut::change_remote_stt_api_key_setting,
+        shortcut::change_remote_stt_model_setting,
         shortcut::change_app_language_setting,
         shortcut::change_keyboard_implementation_setting,
         shortcut::get_keyboard_implementation,

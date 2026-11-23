@@ -5,6 +5,7 @@ use crate::audio_toolkit::is_microphone_access_denied;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::transcription::TranscriptionManager;
+use crate::remote_stt;
 use crate::settings::{get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID};
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
@@ -320,9 +321,18 @@ impl ShortcutAction for TranscribeAction {
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
 
-        // Load model in the background
+        // Load model in the background. With remote transcription on, skip it (saves the local
+        // model's RAM) and open the connection to the server instead; the local model is loaded
+        // only if the remote call fails.
         let tm = app.state::<Arc<TranscriptionManager>>();
-        tm.initiate_model_load();
+        let remote_settings = get_settings(app);
+        if remote_stt::is_configured(&remote_settings) {
+            tauri::async_runtime::spawn(async move {
+                remote_stt::prewarm(&remote_settings).await;
+            });
+        } else {
+            tm.initiate_model_load();
+        }
 
         // Pre-warm API connection during recording so TCP+TLS handshake is done
         // before transcription completes. Saves ~150-250ms on the post-processing call.
@@ -480,7 +490,7 @@ impl ShortcutAction for TranscribeAction {
 
                 let transcription_time = Instant::now();
                 let samples_clone = samples.clone(); // Clone for history saving
-                match tm.transcribe(samples) {
+                match tm.transcribe_auto(samples).await {
                     Ok(transcription) => {
                         debug!(
                             "Transcription completed in {:?}: '{}'",

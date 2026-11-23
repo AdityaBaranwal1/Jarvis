@@ -1026,6 +1026,42 @@ pub fn change_append_trailing_space_setting(app: AppHandle, enabled: bool) -> Re
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_remote_stt_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.remote_stt_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_remote_stt_base_url_setting(app: AppHandle, base_url: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.remote_stt_base_url = base_url.trim().to_string();
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_remote_stt_api_key_setting(app: AppHandle, api_key: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.remote_stt_api_key = api_key.trim().to_string();
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_remote_stt_model_setting(app: AppHandle, model: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.remote_stt_model = model.trim().to_string();
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_app_language_setting(app: AppHandle, language: String) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.app_language = language.clone();
