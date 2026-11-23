@@ -23,6 +23,7 @@ mod paste_tx;
 pub mod portable;
 #[cfg(target_os = "linux")]
 mod primary_selection;
+mod remote_stt;
 mod secure_input;
 mod settings;
 mod shortcut;
@@ -735,6 +736,10 @@ pub fn run(cli_args: CliArgs) {
             shortcut::resume_all_bindings,
             shortcut::change_mute_while_recording_setting,
             shortcut::change_append_trailing_space_setting,
+            shortcut::change_remote_stt_enabled_setting,
+            shortcut::change_remote_stt_base_url_setting,
+            shortcut::change_remote_stt_api_key_setting,
+            shortcut::change_remote_stt_model_setting,
             shortcut::change_lazy_stream_close_setting,
             shortcut::change_vad_enabled_setting,
             shortcut::change_long_form_chunking_setting,

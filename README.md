@@ -8,6 +8,7 @@ Forked from [Handy](https://github.com/cjpais/Handy); on Handy v0.10.1 since 202
 
 - Local speech-to-text via Parakeet, Whisper, Canary, Qwen3-ASR, Moonshine and more (GGUF models through transcribe.cpp, CPU or Vulkan GPU)
 - Capture source: microphone, or the audio playing on this PC (WASAPI loopback)
+- Optional remote transcription: an OpenAI-compatible `/audio/transcriptions` server (Settings → Advanced → Transcription), falling back to the local model when it fails
 - Push-to-talk or toggle mode with configurable hotkeys
 - LLM post-processing (OpenAI, Groq, Anthropic, Cerebras, OpenRouter, or custom provider)
 - Voice Activity Detection (Silero VAD v4)
@@ -57,7 +58,7 @@ The first build takes a while (Rust plus the transcribe.cpp/ggml C++ build). Sub
 `git merge vX.Y.Z` on a branch. Jarvis-only changes to keep: branding, no updater (forced off in
 `settings::update_checks_forced_disabled`), the capture source (vendored `handy-recorder` with a
 loopback patch, `src-tauri/vendor/handy-recorder/JARVIS-PATCH.md`), Windows mute by volume
-attenuation and the post-processing connection pre-warm.
+attenuation, the post-processing connection pre-warm, and (branch `feat/remote-stt-0.10.1`) optional remote transcription (`src-tauri/src/remote_stt.rs`).
 
 ## License
 

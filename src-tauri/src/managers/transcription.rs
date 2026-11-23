@@ -16,6 +16,7 @@ use crate::managers::audio::{create_smoothed_detector, AudioRecordingManager};
 use crate::managers::model::ModelManager;
 use crate::notices::{self, Notice, NoticeCode, NoticeSource};
 use crate::overlay;
+use crate::remote_stt;
 use crate::settings::{
     get_settings, AppSettings, ChineseScript, ModelUnloadTimeout, TranscribeAcceleratorSetting,
 };
@@ -989,6 +990,45 @@ impl TranscriptionManager {
         self.complete(started, samples, live)
     }
 
+    /// Jarvis: transcribe a recording on the remote OpenAI-compatible server
+    /// when remote transcription is configured, falling back to the local
+    /// model (`transcribe_recording`) on any error. In remote mode recording
+    /// starts no live decode and loads no local model, so the fallback loads
+    /// it here and runs a batch decode.
+    pub async fn transcribe_recording_auto(&self, samples: Vec<f32>) -> Result<Transcription> {
+        let settings = get_settings(&self.app_handle);
+        if samples.is_empty() || !remote_stt::is_configured(&settings) || self.is_streaming() {
+            return self.transcribe_recording(samples);
+        }
+        let started = Instant::now();
+        let audio_secs = samples.len() as f64 / 16_000.0;
+        match remote_stt::transcribe(&settings, &samples).await {
+            Ok(raw) => {
+                let (text, language) = finish_remote_text(raw, &settings);
+                info!(
+                    "Remote transcription completed in {}ms ({:.1}s of audio)",
+                    started.elapsed().as_millis(),
+                    audio_secs
+                );
+                Ok(Transcription {
+                    text,
+                    language: Some(language),
+                })
+            }
+            Err(e) => {
+                warn!(
+                    "Remote transcription failed after {}ms ({}); falling back to the local model",
+                    started.elapsed().as_millis(),
+                    e
+                );
+                if !settings.selected_model.is_empty() {
+                    self.initiate_model_load(true);
+                }
+                self.transcribe_recording(samples)
+            }
+        }
+    }
+
     /// The final text of one transcription, from its live result or else a
     /// batch run of `audio`. Every transcription finishes here.
     fn complete(
@@ -1255,6 +1295,34 @@ struct RunOutcome {
     text: String,
     /// The language the model itself detected, if it reported one.
     model_detected_language: Option<String>,
+}
+
+/// Jarvis: the remote server's text through the same post-processing as a
+/// local run (Chinese script, custom words, fillers, normalization). The
+/// language is the selected one, or else the model's (the server's) choice.
+fn finish_remote_text(raw: String, settings: &AppSettings) -> (String, LanguageDecision) {
+    let selected = settings.selected_language.trim();
+    let (evidence, language) = if selected.is_empty() || selected == "auto" {
+        (
+            OutputLanguageEvidence::Unknown,
+            LanguageDecision {
+                language: None,
+                source: LanguageSource::Model,
+            },
+        )
+    } else {
+        (
+            OutputLanguageEvidence::UserSelected(selected.to_string()),
+            LanguageDecision {
+                language: Some(selected.to_string()),
+                source: LanguageSource::Selected,
+            },
+        )
+    };
+    // The server gets no vocabulary, so fuzzy custom-word correction applies;
+    // no model language list, so text-based detection is unconstrained.
+    let text = post_process_transcription_text(raw, settings, false, &evidence, &[]);
+    (text, language)
 }
 
 /// One transcription's final text: its output language resolved, then
@@ -2083,6 +2151,35 @@ mod tests {
 
             assert_eq!(result, "学校に行きます", "{evidence:?}");
         }
+    }
+
+    #[test]
+    fn remote_text_gets_local_post_processing() {
+        let settings = AppSettings {
+            custom_words: vec!["Jarvis".to_string()],
+            selected_language: "en".to_string(),
+            ..Default::default()
+        };
+        let (text, language) = finish_remote_text("hello jarviss".to_string(), &settings);
+        assert_eq!(text, "hello Jarvis");
+        assert_eq!(language.language.as_deref(), Some("en"));
+        assert_eq!(language.source, LanguageSource::Selected);
+
+        // Wordless output is dropped, as for local runs.
+        let (text, _) = finish_remote_text(".".to_string(), &settings);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn remote_text_in_auto_mode_leaves_the_language_to_the_server() {
+        let settings = AppSettings {
+            selected_language: "auto".to_string(),
+            ..Default::default()
+        };
+        let (text, language) = finish_remote_text("Hello world.".to_string(), &settings);
+        assert_eq!(text, "Hello world.");
+        assert_eq!(language.language, None);
+        assert_eq!(language.source, LanguageSource::Model);
     }
 
     #[test]

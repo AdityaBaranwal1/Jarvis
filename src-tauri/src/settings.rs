@@ -403,6 +403,39 @@ impl std::ops::DerefMut for SecretMap {
     }
 }
 
+/// Jarvis: a string setting that must not appear in logs (`Loaded settings:
+/// {:?}` is logged at debug level). Serialized as a plain string.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(transparent)]
+pub struct SecretString(String);
+
+impl SecretString {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "\"\""
+        } else {
+            "[REDACTED]"
+        })
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+fn default_remote_stt_model() -> String {
+    "whisper-1".to_string()
+}
+
 /* still handy for composing the initial JSON in the store ------------- */
 /// The container-level `serde(default)` (backed by the `Default` impl below)
 /// guarantees every field — including ones added in the future — falls back to
@@ -553,6 +586,18 @@ pub struct AppSettings {
     pub filler_word_removal_enabled: bool,
     #[serde(default)]
     pub custom_filler_words: Option<Vec<String>>,
+    /// Jarvis: send dictation to an OpenAI-compatible `/audio/transcriptions`
+    /// server instead of the local model (falls back to the local model on any
+    /// error). Off by default.
+    #[serde(default)]
+    pub remote_stt_enabled: bool,
+    /// e.g. `https://speech-to-text.example.ts.net/v1`
+    #[serde(default)]
+    pub remote_stt_base_url: String,
+    #[serde(default)]
+    pub remote_stt_api_key: SecretString,
+    #[serde(default = "default_remote_stt_model")]
+    pub remote_stt_model: String,
     /// Fresh installs default from the OS locale; existing stores are migrated
     /// in `apply_settings_migrations`.
     #[serde(default)]
@@ -1086,6 +1131,10 @@ pub fn get_default_settings() -> AppSettings {
         external_script_path: None,
         filler_word_removal_enabled: default_filler_word_removal_enabled(),
         custom_filler_words: None,
+        remote_stt_enabled: false,
+        remote_stt_base_url: String::new(),
+        remote_stt_api_key: SecretString::default(),
+        remote_stt_model: default_remote_stt_model(),
         chinese_script: default_chinese_script(),
         transcribe_accelerator: TranscribeAcceleratorSetting::default(),
         transcribe_gpu_device: default_transcribe_gpu_device(),
@@ -2156,9 +2205,11 @@ mod tests {
         settings
             .post_process_api_keys
             .insert("empty_provider".to_string(), "".to_string());
+        settings.remote_stt_api_key = SecretString::new("stt-secret-key-24680");
 
         let debug_output = format!("{:?}", settings);
 
+        assert!(!debug_output.contains("stt-secret-key-24680"));
         assert!(!debug_output.contains("sk-proj-secret-key-12345"));
         assert!(!debug_output.contains("sk-ant-secret-key-67890"));
         assert!(debug_output.contains("[REDACTED]"));

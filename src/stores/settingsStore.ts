@@ -170,6 +170,14 @@ const settingUpdaters: {
     commands.changeMuteWhileRecordingSetting(value as boolean),
   append_trailing_space: (value) =>
     commands.changeAppendTrailingSpaceSetting(value as boolean),
+  remote_stt_enabled: (value) =>
+    commands.changeRemoteSttEnabledSetting(value as boolean),
+  remote_stt_base_url: (value) =>
+    commands.changeRemoteSttBaseUrlSetting(value as string),
+  remote_stt_api_key: (value) =>
+    commands.changeRemoteSttApiKeySetting(value as string),
+  remote_stt_model: (value) =>
+    commands.changeRemoteSttModelSetting(value as string),
   log_level: (value) => commands.setLogLevel(value as any),
   app_language: (value) => commands.changeAppLanguageSetting(value as string),
   theme: (value) => commands.changeThemeSetting(value as string),

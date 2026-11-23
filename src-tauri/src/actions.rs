@@ -9,6 +9,7 @@ use crate::managers::transcription::policy::{live_decode, LiveDecode, ModelTrait
 use crate::managers::transcription::StreamWorkKind;
 use crate::managers::transcription::{Transcription, TranscriptionManager};
 use crate::notices::{self, Notice, NoticeCode, NoticeSource};
+use crate::remote_stt;
 use crate::settings::{get_settings, AppSettings, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID};
 use crate::shortcut;
 use crate::tray::{set_tray_state, TrayIconState};
@@ -526,7 +527,17 @@ impl ShortcutAction for TranscribeAction {
         let kickoff_started = Instant::now();
         // An empty selection has nothing to load; the check below says so.
         let selected_model = get_settings(app).selected_model;
-        let load_started = !selected_model.is_empty() && tm.initiate_model_load(true);
+        // Jarvis: with remote transcription on, don't load the local model
+        // (saves its RAM); open the connection to the server instead. The
+        // local model loads only if the remote call fails.
+        let remote_settings = get_settings(app);
+        let remote = remote_stt::is_configured(&remote_settings);
+        if remote {
+            tauri::async_runtime::spawn(async move {
+                remote_stt::prewarm(&remote_settings).await;
+            });
+        }
+        let load_started = !remote && !selected_model.is_empty() && tm.initiate_model_load(true);
         let rm_clone = Arc::clone(&rm);
         std::thread::spawn(move || {
             if let Err(e) = rm_clone.preload_vad() {
@@ -557,7 +568,8 @@ impl ShortcutAction for TranscribeAction {
 
         // Don't open the mic if nothing can transcribe the recording. A load
         // started above reports its own failure; one already running doesn't.
-        if !tm.is_model_loaded() {
+        // (Jarvis: in remote mode the server transcribes it.)
+        if !remote && !tm.is_model_loaded() {
             if selected_model.is_empty() {
                 warn!("Not starting recording: no model is selected");
                 tm.raise_no_model_selected();
@@ -593,10 +605,13 @@ impl ShortcutAction for TranscribeAction {
         // Use the app-facing model capability as the single pre-recording source
         // for live streaming decisions. Unknown support is represented as false
         // until the model registry is updated by discovery or runtime load.
-        let model_supports_streaming = selected_model_info
-            .as_ref()
-            .map(|m| m.supports_streaming)
-            .unwrap_or(false);
+        // Jarvis: remote transcription sends the whole recording at the end,
+        // so no live decode (it would need the local model loaded).
+        let model_supports_streaming = !remote
+            && selected_model_info
+                .as_ref()
+                .map(|m| m.supports_streaming)
+                .unwrap_or(false);
         let vad_policy = if !settings.vad_enabled {
             VadPolicy::Disabled
         } else if model_supports_streaming {
@@ -807,7 +822,7 @@ impl ShortcutAction for TranscribeAction {
                     // otherwise a batch run of the samples. A cancel is surfaced
                     // as an error, so it never starts a batch run.
                     let transcription_time = Instant::now();
-                    let transcription_result = tm.transcribe_recording(samples);
+                    let transcription_result = tm.transcribe_recording_auto(samples).await;
 
                     // Await WAV save and verify
                     let wav_saved = match wav_handle.await {
