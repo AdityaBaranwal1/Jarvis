@@ -112,7 +112,7 @@ export const CaptureSourceSelector: React.FC<CaptureSourceSelectorProps> =
                 selectedValue={systemDevice}
                 onSelect={handleSystemDeviceChange}
                 disabled={busy || systemDevices.length === 0}
-                onRefresh={loadState}
+                onOpen={loadState}
                 placeholder={
                   systemDevices.length === 0 ? "Loading..." : "Select device"
                 }

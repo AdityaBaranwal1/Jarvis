@@ -1,3 +1,4 @@
+/* eslint-disable i18next/no-literal-string -- the wordmark is the brand name */
 const JarvisTextLogo = ({
   width,
   height,
