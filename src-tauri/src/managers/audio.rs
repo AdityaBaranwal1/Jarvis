@@ -9,7 +9,7 @@ use crate::audio_toolkit::{
 use crate::helpers::clamshell;
 use crate::managers::transcription::StreamRouter;
 use crate::notices::NoticeCode;
-use crate::settings::{get_settings, write_settings, AppSettings, VadBackend};
+use crate::settings::{get_settings, write_settings, AppSettings, CaptureSource, VadBackend};
 use crate::utils;
 use handy_recorder::{Channels, EndReason, ErrorKind, Recorder, RecorderConfig, StartError};
 use log::{debug, error, info, trace, warn};
@@ -29,6 +29,7 @@ const EARSHOT_VAD_THRESHOLD: f32 = 0.5;
 // requiring a manual endpoint reinit (e.g. toggling Windows Sonic) to recover.
 // Attenuating master volume to 0.0 produces the same audible effect without
 // touching mute state, so no session-state event is fired.
+#[cfg(target_os = "windows")]
 static PRIOR_VOLUME: Mutex<Option<f32>> = Mutex::new(None);
 
 fn set_mute(mute: bool) {
@@ -243,7 +244,11 @@ fn get_mute() -> Option<bool> {
 /// we leave it muted (the user's own state). If it's unknown (`None`), we
 /// default to unmuting so audio is never left stranded muted by us.
 fn restore_mute(prev_muted: Option<bool>) {
-    if prev_muted != Some(true) {
+    // Jarvis: on Windows set_mute only attenuates the master volume and
+    // set_mute(false) only puts the saved volume back, never touching the mute
+    // flag, so it must always run: a system that was already muted stays muted
+    // and gets its volume back.
+    if cfg!(target_os = "windows") || prev_muted != Some(true) {
         set_mute(false);
     }
 }
@@ -439,6 +444,16 @@ fn open_microphone(config: RecorderConfig) -> Result<OpenMicrophone, handy_recor
 
 /// Opens with the selected channel, or averages all channels if the device
 /// doesn't have it (a different microphone than the one it was chosen on).
+/// Jarvis: the recorder device ID for loopback capture of an output device
+/// (by name; `None` = the default output device).
+fn loopback_device_id(output_device: Option<&str>) -> String {
+    format!(
+        "{}{}",
+        handy_recorder::LOOPBACK_PREFIX,
+        output_device.unwrap_or_default()
+    )
+}
+
 fn open_microphone_on_channel(
     device: Option<String>,
     channel: Option<u16>,
@@ -607,6 +622,23 @@ impl AudioRecordingManager {
 
     pub fn invalidate_device_cache(&self) {
         *self.cached_device.lock().unwrap() = None;
+    }
+
+    /// Jarvis: the device the capture source records from. System audio (and
+    /// Mixed, which records system audio only for now) is an output device
+    /// opened for loopback through the vendored handy-recorder's
+    /// `LOOPBACK_PREFIX`; the microphone resolves as upstream does.
+    fn resolve_capture_device(&self, settings: &AppSettings) -> MicrophoneResolution {
+        match settings.capture_source {
+            CaptureSource::Microphone => self.resolve_microphone_device(settings),
+            CaptureSource::System | CaptureSource::Mixed => MicrophoneResolution {
+                device: Some(loopback_device_id(
+                    settings.selected_system_audio_device.as_deref(),
+                )),
+                from_cache: false,
+                unavailable_selected_microphone: None,
+            },
+        }
     }
 
     fn resolve_microphone_device(&self, settings: &AppSettings) -> MicrophoneResolution {
@@ -781,6 +813,10 @@ impl AudioRecordingManager {
         if !settings.mute_while_recording {
             return;
         }
+        // Jarvis: muting the output would silence the audio being recorded.
+        if settings.capture_source != CaptureSource::Microphone {
+            return;
+        }
 
         // Lock order: is_open before mute_state (matches stop_microphone_stream).
         let is_open = self.is_open.lock().unwrap();
@@ -876,8 +912,11 @@ impl AudioRecordingManager {
         // input devices at all fails inside open() with `DeviceUnavailable`.
         let settings = get_settings(&self.app_handle);
         let resolve_started = Instant::now();
-        let mut resolution = self.resolve_microphone_device(&settings);
+        let mut resolution = self.resolve_capture_device(&settings);
         let resolve_elapsed = resolve_started.elapsed();
+        // Jarvis: system audio is recorded from an output device, mixed to
+        // mono; the microphone channel and headset options don't apply.
+        let loopback = settings.capture_source != CaptureSource::Microphone;
 
         // Ensure VAD is loaded if it wasn't for whatever reason; its frame
         // size is the chunk size.
@@ -885,8 +924,12 @@ impl AudioRecordingManager {
         let frames_per_chunk = self.vad_frame_samples()?;
         let vad_elapsed = vad_started.elapsed();
 
-        let channel = *self.selected_channel.lock().unwrap();
-        let take_headset = self.airpods_mode.load(Ordering::Acquire);
+        let channel = if loopback {
+            None
+        } else {
+            *self.selected_channel.lock().unwrap()
+        };
+        let take_headset = !loopback && self.airpods_mode.load(Ordering::Acquire);
         let open_started = Instant::now();
         let microphone = match open_microphone_on_channel(
             resolution.device.clone(),
@@ -900,7 +943,7 @@ impl AudioRecordingManager {
                 // surfacing the error.
                 warn!("Recorder open failed ({first_err}); re-resolving device and retrying once");
                 self.invalidate_device_cache();
-                resolution = self.resolve_microphone_device(&settings);
+                resolution = self.resolve_capture_device(&settings);
                 open_microphone_on_channel(
                     resolution.device.clone(),
                     channel,
@@ -1376,6 +1419,16 @@ impl AudioRecordingManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_device_id_uses_the_recorder_prefix() {
+        assert_eq!(loopback_device_id(None), "loopback:");
+        assert_eq!(
+            loopback_device_id(Some("Speakers (Realtek(R) Audio)")),
+            "loopback:Speakers (Realtek(R) Audio)"
+        );
+        assert!(loopback_device_id(Some("x")).starts_with(handy_recorder::LOOPBACK_PREFIX));
+    }
 
     /// A recorder error, without touching a device: the request is rejected
     /// before one is opened.
